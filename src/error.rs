@@ -1,4 +1,4 @@
-//! Deterministic error codes (SPEC §20).
+//! Deterministic error codes (SPEC_v0.2.0 §18).
 //!
 //! Error text is stable and machine-readable. ScopeFolio MUST return
 //! deterministic errors for all failure modes and MUST NOT silently

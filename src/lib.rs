@@ -1,15 +1,15 @@
 //! ScopeFolio — Deterministic scoped file reading.
 //!
 //! Given the current file and a line number, shows the appropriate local
-//! scope (SPEC §12). The agent specifies WHERE; ScopeFolio determines
-//! HOW MUCH (SPEC §14).
+//! scope (SPEC_v0.2.0 §11). The agent specifies WHERE; ScopeFolio
+//! determines HOW MUCH (SPEC_v0.2.0 §8, §10).
 //!
 //! # Library API
 //!
 //! ```no_run
 //! use scopefolio::{read, ReadResult, ScopeFolioError};
 //!
-//! let result: ReadResult = read("SPEC.md", 597, 50, 0.0)?;
+//! let result: ReadResult = read("SPEC_v0.2.0.md", 296, 400, 0.0)?;
 //! println!("range {}-{}", result.start_line, result.end_line);
 //! println!("{}", String::from_utf8_lossy(&result.content));
 //! # Ok::<(), ScopeFolioError>(())
@@ -24,10 +24,15 @@ use std::fs;
 
 // ── Public constants ──────────────────────────────────────────
 
-/// Default target number of lines per leaf partition (SPEC §7, §19).
-pub const DEFAULT_PARTITION_LINES: usize = 50;
+/// Default target number of lines per leaf partition (SPEC_v0.2.0 §7, §8).
+///
+/// This is a *target leaf size*, not a maximum width: an even split of
+/// `n` lines into `k = max(1, round(n / t))` leaves makes each leaf
+/// `floor(n/k)` or `ceil(n/k)` lines, inside `[3t/4, 3t/2)` when `k > 1`
+/// (§8.3).
+pub const DEFAULT_PARTITION_LINES: usize = 400;
 
-/// Default contextual offset ratio (SPEC §8, §19).
+/// Default contextual offset ratio (SPEC_v0.2.0 §10, §17).
 pub const DEFAULT_OFFSET_RATIO: f64 = 0.0;
 
 // ── Public types ──────────────────────────────────────────────
@@ -40,16 +45,16 @@ pub struct ReadResult {
     /// Last line of the returned range (1-based, inclusive).
     pub end_line: usize,
     /// Raw bytes of the selected lines, exactly as they appear in the file.
-    /// Line endings, whitespace and encoding are preserved (SPEC §13).
+    /// Line endings, whitespace and encoding are preserved (SPEC_v0.2.0 §14).
     pub content: Vec<u8>,
 }
 
-/// Errors that can occur during a read operation (SPEC §20).
+/// Errors that can occur during a read operation (SPEC_v0.2.0 §18).
 #[derive(Debug)]
 pub enum ScopeFolioError {
     /// The target file does not exist.
     FileNotFound,
-    /// The requested line is outside the valid file range (SPEC §10).
+    /// The requested line is outside the valid file range (SPEC_v0.2.0 §11).
     InvalidLine,
     /// `partition_lines` is not a positive integer.
     InvalidPartitionLines,
@@ -79,22 +84,22 @@ impl std::error::Error for ScopeFolioError {}
 
 /// Read the local scope around `line` from `file_path`.
 ///
-/// Constructs the binary partition tree for the current file (SPEC §9),
-/// locates the leaf partition containing `line`, expands it by
-/// `offset_ratio * partition_lines` lines on each side (SPEC §8), clamps the
-/// result to the file boundaries (SPEC §10), and returns the selected lines
-/// byte-for-byte.
+/// Constructs the canonical even-split partition for the current file
+/// (SPEC_v0.2.0 §8, §9), locates the leaf partition containing `line`
+/// (§11), expands it by `offset = floor(offset_ratio · partition_lines)`
+/// lines on each side (§10), clamps the result to the file boundaries, and
+/// returns the selected lines byte-for-byte.
 ///
 /// This operation is stateless and deterministic: the same file contents,
 /// target line and configuration always produce the same range and content
-/// (SPEC §18).
+/// (SPEC_v0.2.0 §12).
 pub fn read(
     file_path: &str,
     line: usize,
     partition_lines: usize,
     offset_ratio: f64,
 ) -> Result<ReadResult, ScopeFolioError> {
-    // Validate configuration (SPEC §20).
+    // Validate configuration (SPEC_v0.2.0 §17, §18).
     if partition_lines == 0 {
         return Err(ScopeFolioError::InvalidPartitionLines);
     }
@@ -130,15 +135,17 @@ pub fn read(
     let leaf = partition::find_leaf(&tree, line);
 
     // 5. Expand the partition according to `offset_ratio`.
-    //    Offset is approximately `offset_ratio` times the target width
-    //    (SPEC §8). Deterministic: IEEE-754 round-half-to-even.
-    let offset = (partition_lines as f64 * offset_ratio).round() as usize;
+    //    Offset is `floor(offset_ratio · partition_lines)` lines on each
+    //    side (SPEC_v0.2.0 §10). Computed in IEEE-754 f64; the exact
+    //    integer result follows for the standard ratios (e.g. 0.1·400 =
+    //    40.0 exactly in f64, floored to 40).
+    let offset = (partition_lines as f64 * offset_ratio).floor() as usize;
 
     // 6. Clamp the resulting range to the file.
     let start_line = leaf.start.saturating_sub(offset).max(1);
     let end_line = (leaf.end + offset).min(line_map.line_count);
 
-    // 7. Return the selected lines, byte-for-byte (SPEC §13).
+    // 7. Return the selected lines, byte-for-byte (SPEC_v0.2.0 §14).
     let (byte_start, _) = line_map.byte_range(start_line);
     let (_, byte_end) = line_map.byte_range(end_line);
     let content = raw[byte_start..byte_end].to_vec();
@@ -164,67 +171,72 @@ mod tests {
 
     #[test]
     fn read_basic() {
-        let content: String = (1..=200).map(|i| format!("{i}\n")).collect();
+        // n=800, t=400: k=2 → leaves [1, 400], [401, 800].
+        let content: String = (1..=800).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        let result = read(path.to_str().unwrap(), 59, 50, 0.0).unwrap();
-        // Line 59 → leaf [51, 100] (first split at 50).
-        assert_eq!(result.start_line, 51);
-        assert_eq!(result.end_line, 100);
-        let expected: String = (51..=100).map(|i| format!("{i}\n")).collect();
+        let result = read(path.to_str().unwrap(), 100, 400, 0.0).unwrap();
+        assert_eq!(result.start_line, 1);
+        assert_eq!(result.end_line, 400);
+        let expected: String = (1..=400).map(|i| format!("{i}\n")).collect();
         assert_eq!(result.content, expected.as_bytes());
     }
 
     #[test]
     fn read_first_leaf() {
-        let content: String = (1..=100).map(|i| format!("{i}\n")).collect();
+        // n=1000, t=400: k=3 → leaves [1, 333], [334, 666], [667, 1000].
+        let content: String = (1..=1000).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        let result = read(path.to_str().unwrap(), 1, 50, 0.0).unwrap();
+        let result = read(path.to_str().unwrap(), 1, 400, 0.0).unwrap();
         assert_eq!(result.start_line, 1);
-        assert_eq!(result.end_line, 50);
+        assert_eq!(result.end_line, 333);
         assert!(result.content.starts_with(b"1\n"));
-        assert!(result.content.ends_with(b"50\n"));
+        assert!(result.content.ends_with(b"333\n"));
     }
 
     #[test]
     fn read_last_line_clamps_upper_boundary() {
-        let content: String = (1..=100).map(|i| format!("{i}\n")).collect();
+        let content: String = (1..=1000).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        let result = read(path.to_str().unwrap(), 100, 50, 0.5).unwrap();
-        // Leaf [51, 100], offset 25 → end clamped to 100.
-        assert_eq!(result.end_line, 100);
+        let result = read(path.to_str().unwrap(), 1000, 400, 0.5).unwrap();
+        // Leaf [667, 1000], offset floor(0.5·400) = 200 → end clamped to
+        // 1000.
+        assert_eq!(result.end_line, 1000);
     }
 
     #[test]
     fn read_first_line_clamps_lower_boundary() {
-        let content: String = (1..=100).map(|i| format!("{i}\n")).collect();
+        let content: String = (1..=1000).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        let result = read(path.to_str().unwrap(), 1, 50, 0.5).unwrap();
-        // Leaf [1, 50], offset 25 → start clamped to 1.
+        let result = read(path.to_str().unwrap(), 1, 400, 0.5).unwrap();
+        // Leaf [1, 333], offset floor(0.5·400) = 200 → start clamped to 1.
         assert_eq!(result.start_line, 1);
     }
 
     #[test]
     fn offset_expands_both_sides() {
-        let content: String = (1..=200).map(|i| format!("{i}\n")).collect();
+        let content: String = (1..=1000).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        // Target 50, ratio 0.1 → offset 5 → leaf [51,100] → [46, 105].
-        let result = read(path.to_str().unwrap(), 59, 50, 0.1).unwrap();
-        assert_eq!(result.start_line, 46);
-        assert_eq!(result.end_line, 105);
+        // Line 500 → leaf [334, 666]; offset floor(0.1·400) = 40 →
+        // [294, 706].
+        let result = read(path.to_str().unwrap(), 500, 400, 0.1).unwrap();
+        assert_eq!(result.start_line, 294);
+        assert_eq!(result.end_line, 706);
     }
 
     #[test]
     fn target_line_is_always_in_range() {
-        let content: String = (1..=1193).map(|i| format!("{i}\n")).collect();
+        // Canonical n=1200, t=400: k=3 → leaves [1, 400], [401, 800],
+        // [801, 1200]. Every line must be inside its expanded range.
+        let content: String = (1..=1200).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        for line in 1..=1193 {
-            let result = read(path.to_str().unwrap(), line, 50, 0.1).unwrap();
+        for line in 1..=1200 {
+            let result = read(path.to_str().unwrap(), line, 400, 0.1).unwrap();
             assert!(
                 result.start_line <= line && line <= result.end_line,
                 "line {line} not in {}-{}",
@@ -236,44 +248,57 @@ mod tests {
 
     #[test]
     fn small_file_single_leaf() {
+        // n=3 < 3t/2 for any target → single leaf [1, 3].
         let (_dir, path) = temp_file(b"A\nB\nC\n");
-        let result = read(path.to_str().unwrap(), 2, 50, 0.0).unwrap();
+        let result = read(path.to_str().unwrap(), 2, 400, 0.0).unwrap();
         assert_eq!((result.start_line, result.end_line), (1, 3));
         assert_eq!(result.content, b"A\nB\nC\n");
     }
 
     #[test]
+    fn default_t_400_single_leaf() {
+        // Canonical n=453 with the default target t=400: k=1 → the whole
+        // file is one leaf, so any target line returns [1, 453].
+        assert_eq!(DEFAULT_PARTITION_LINES, 400);
+        let content: String = (1..=453).map(|i| format!("{i}\n")).collect();
+        let (_dir, path) = temp_file(&content);
+
+        let result = read(path.to_str().unwrap(), 100, DEFAULT_PARTITION_LINES, 0.0).unwrap();
+        assert_eq!((result.start_line, result.end_line), (1, 453));
+    }
+
+    #[test]
     fn final_line_without_terminator_preserved() {
         let (_dir, path) = temp_file(b"A\nB\nC");
-        let result = read(path.to_str().unwrap(), 3, 50, 0.0).unwrap();
+        let result = read(path.to_str().unwrap(), 3, 400, 0.0).unwrap();
         assert_eq!(result.content, b"A\nB\nC");
     }
 
     #[test]
     fn crlf_preserved() {
         let (_dir, path) = temp_file(b"A\r\nB\r\nC\r\n");
-        let result = read(path.to_str().unwrap(), 2, 50, 0.0).unwrap();
+        let result = read(path.to_str().unwrap(), 2, 400, 0.0).unwrap();
         assert_eq!(result.content, b"A\r\nB\r\nC\r\n");
     }
 
     #[test]
     fn invalid_line_below_range() {
         let (_dir, path) = temp_file(b"A\nB\n");
-        let err = read(path.to_str().unwrap(), 0, 50, 0.0).unwrap_err();
+        let err = read(path.to_str().unwrap(), 0, 400, 0.0).unwrap_err();
         assert!(matches!(err, ScopeFolioError::InvalidLine));
     }
 
     #[test]
     fn invalid_line_above_range() {
         let (_dir, path) = temp_file(b"A\nB\n");
-        let err = read(path.to_str().unwrap(), 3, 50, 0.0).unwrap_err();
+        let err = read(path.to_str().unwrap(), 3, 400, 0.0).unwrap_err();
         assert!(matches!(err, ScopeFolioError::InvalidLine));
     }
 
     #[test]
     fn empty_file_is_invalid_line() {
         let (_dir, path) = temp_file(b"");
-        let err = read(path.to_str().unwrap(), 1, 50, 0.0).unwrap_err();
+        let err = read(path.to_str().unwrap(), 1, 400, 0.0).unwrap_err();
         assert!(matches!(err, ScopeFolioError::InvalidLine));
     }
 
@@ -287,27 +312,27 @@ mod tests {
     #[test]
     fn invalid_offset_ratio() {
         let (_dir, path) = temp_file(b"A\n");
-        let err = read(path.to_str().unwrap(), 1, 50, -0.1).unwrap_err();
+        let err = read(path.to_str().unwrap(), 1, 400, -0.1).unwrap_err();
         assert!(matches!(err, ScopeFolioError::InvalidOffsetRatio));
-        let err = read(path.to_str().unwrap(), 1, 50, f64::NAN).unwrap_err();
+        let err = read(path.to_str().unwrap(), 1, 400, f64::NAN).unwrap_err();
         assert!(matches!(err, ScopeFolioError::InvalidOffsetRatio));
     }
 
     #[test]
     fn file_not_found() {
-        let err = read("no/such/file.txt", 1, 50, 0.0).unwrap_err();
+        let err = read("no/such/file.txt", 1, 400, 0.0).unwrap_err();
         assert!(matches!(err, ScopeFolioError::FileNotFound));
     }
 
     #[test]
     fn determinism_same_input_same_output() {
-        let content: String = (1..=500).map(|i| format!("{i}\n")).collect();
+        let content: String = (1..=5000).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
         let path = path.to_str().unwrap();
 
-        for line in [1, 25, 50, 51, 250, 499, 500] {
-            let a = read(path, line, 50, 0.1).unwrap();
-            let b = read(path, line, 50, 0.1).unwrap();
+        for line in [1, 25, 50, 51, 250, 499, 500, 2500, 5000] {
+            let a = read(path, line, 400, 0.1).unwrap();
+            let b = read(path, line, 400, 0.1).unwrap();
             assert_eq!(a.start_line, b.start_line);
             assert_eq!(a.end_line, b.end_line);
             assert_eq!(a.content, b.content);
@@ -319,7 +344,7 @@ mod tests {
         let source = "line one\n  indented\nline three\n";
         let (_dir, path) = temp_file(source.as_bytes());
 
-        let result = read(path.to_str().unwrap(), 2, 50, 0.0).unwrap();
+        let result = read(path.to_str().unwrap(), 2, 400, 0.0).unwrap();
         assert_eq!(result.content, source.as_bytes());
     }
 
@@ -328,7 +353,8 @@ mod tests {
         let content: String = (1..=100).map(|i| format!("{i}\n")).collect();
         let (_dir, path) = temp_file(&content);
 
-        // Target width 25: root splits [1,50]/[51,100], then into 25-line leaves.
+        // Target 25: even split into k = round(100/25) = 4 leaves of
+        // exactly 25 lines each → line 60 → [51, 75].
         let result = read(path.to_str().unwrap(), 60, 25, 0.0).unwrap();
         assert_eq!((result.start_line, result.end_line), (51, 75));
     }

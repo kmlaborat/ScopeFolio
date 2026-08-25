@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "scopefolio",
-    version = "0.1.0",
-    about = "ScopeFolio v0.1.0 — Deterministic scoped file reading"
+    version = "0.2.0",
+    about = "ScopeFolio v0.2.0 — Deterministic scoped file reading"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -23,7 +23,7 @@ pub enum Command {
         #[arg(long)]
         line: usize,
 
-        /// Target number of lines per leaf partition (default: 50).
+        /// Target number of lines per leaf partition (default: 400).
         #[arg(long, default_value_t = scopefolio::DEFAULT_PARTITION_LINES)]
         partition_lines: usize,
 

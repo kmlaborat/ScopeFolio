@@ -1,4 +1,4 @@
-//! CLI output formatting (SPEC §13).
+//! CLI output formatting (SPEC_v0.2.0 §14).
 //!
 //! The output identifies the returned range and prefixes each line with its
 //! line number. The line-number presentation is metadata: it is added to the

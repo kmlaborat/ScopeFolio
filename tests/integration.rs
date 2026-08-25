@@ -34,7 +34,7 @@ fn numbered_lines(count: usize) -> String {
     (1..=count).map(|i| format!("L{i}\n")).collect()
 }
 
-// ─── Partitioning ─────────────────────────────────────────────
+// ─── Partitioning (canonical v0.2.0 cases, default t=400) ──────
 
 #[test]
 fn small_file_returns_whole_file() {
@@ -53,29 +53,115 @@ fn small_file_returns_whole_file() {
 }
 
 #[test]
-fn exact_partition_boundary() {
-    let content = numbered_lines(100);
+fn canonical_n453_single_leaf() {
+    // n=453, t=400: k = round(453/400) = 1 → single leaf [1, 453].
+    let content = numbered_lines(453);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    // Root split: [1,50] / [51,100].
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "50"]);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:1-50", path.to_str().unwrap())));
-
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "51"]);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:51-100", path.to_str().unwrap())));
+    for line in ["1", "226", "227", "453"] {
+        let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.starts_with(&format!("{}:1-453", path.to_str().unwrap())),
+            "line {line}: got {:?}",
+            stdout.lines().next().unwrap()
+        );
+    }
 }
 
 #[test]
-fn odd_line_count_uneven_final_partition() {
+fn canonical_n600_tie_two_equal_leaves() {
+    // n=600, t=400: k = round(1.5) = 2 (tie up) → leaves [1,300],
+    // [301,600].
+    let content = numbered_lines(600);
+    let (_dir, path) = create_temp_file(content.as_bytes());
+
+    for (line, expected) in [("1", "1-300"), ("300", "1-300"), ("301", "301-600"), ("600", "301-600")] {
+        let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.starts_with(&format!("{}:{}", path.to_str().unwrap(), expected)),
+            "line {line}: got {:?}",
+            stdout.lines().next().unwrap()
+        );
+    }
+}
+
+#[test]
+fn canonical_n800_two_equal_leaves() {
+    // n=800, t=400: k = 2 → leaves [1,400], [401,800].
+    let content = numbered_lines(800);
+    let (_dir, path) = create_temp_file(content.as_bytes());
+
+    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "400"]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(&format!("{}:1-400", path.to_str().unwrap())));
+
+    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "401"]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(&format!("{}:401-800", path.to_str().unwrap())));
+}
+
+#[test]
+fn canonical_n1000_three_leaves() {
+    // n=1000, t=400: k = 3 → leaves [1,333], [334,666], [667,1000].
+    let content = numbered_lines(1000);
+    let (_dir, path) = create_temp_file(content.as_bytes());
+
+    for (line, expected) in [
+        ("1", "1-333"),
+        ("333", "1-333"),
+        ("334", "334-666"),
+        ("666", "334-666"),
+        ("667", "667-1000"),
+        ("1000", "667-1000"),
+    ] {
+        let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.starts_with(&format!("{}:{}", path.to_str().unwrap(), expected)),
+            "line {line}: got {:?}",
+            stdout.lines().next().unwrap()
+        );
+    }
+}
+
+#[test]
+fn canonical_n1200_three_equal_leaves() {
+    // n=1200, t=400: k = 3 → leaves [1,400], [401,800], [801,1200].
+    let content = numbered_lines(1200);
+    let (_dir, path) = create_temp_file(content.as_bytes());
+
+    for (line, expected) in [
+        ("1", "1-400"),
+        ("400", "1-400"),
+        ("401", "401-800"),
+        ("800", "401-800"),
+        ("801", "801-1200"),
+        ("1200", "801-1200"),
+    ] {
+        let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.starts_with(&format!("{}:{}", path.to_str().unwrap(), expected)),
+            "line {line}: got {:?}",
+            stdout.lines().next().unwrap()
+        );
+    }
+}
+
+#[test]
+fn odd_line_count_small_file_single_leaf() {
+    // n=101 < 3t/2 (t=400) → single leaf; the old uneven-final-partition
+    // behavior is gone — the whole file is one partition.
     let content = numbered_lines(101);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "101"]);
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    // Second-level split of [51,101]: [51,75] / [76,101].
-    assert!(stdout.starts_with(&format!("{}:76-101", path.to_str().unwrap())));
+    for line in ["1", "101"] {
+        let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.starts_with(&format!("{}:1-101", path.to_str().unwrap())));
+    }
 }
 
 #[test]
@@ -104,38 +190,40 @@ fn large_file() {
     assert!(start <= 2500 && 2500 <= end);
 }
 
-// ─── Line resolution ──────────────────────────────────────────
+// ─── Line resolution ───────────────────────────────────────────
 
 #[test]
 fn first_line() {
-    let content = numbered_lines(100);
+    let content = numbered_lines(800);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
     let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "1"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:1-50", path.to_str().unwrap())));
+    assert!(stdout.starts_with(&format!("{}:1-400", path.to_str().unwrap())));
 }
 
 #[test]
 fn last_line() {
-    let content = numbered_lines(100);
+    let content = numbered_lines(800);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "100"]);
+    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "800"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:51-100", path.to_str().unwrap())));
+    assert!(stdout.starts_with(&format!("{}:401-800", path.to_str().unwrap())));
 }
 
 #[test]
 fn line_immediately_before_and_after_boundary() {
-    let content = numbered_lines(100);
+    let content = numbered_lines(800);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
     for (line, expected) in [
-        ("49", "1-50"),
-        ("50", "1-50"),
-        ("51", "51-100"),
-        ("52", "51-100"),
+        ("1", "1-400"),
+        ("399", "1-400"),
+        ("400", "1-400"),
+        ("401", "401-800"),
+        ("402", "401-800"),
+        ("800", "401-800"),
     ] {
         let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", line]);
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -149,50 +237,50 @@ fn line_immediately_before_and_after_boundary() {
 
 #[test]
 fn middle_of_partition() {
-    let content = numbered_lines(100);
+    let content = numbered_lines(800);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "25"]);
+    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "200"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:1-50", path.to_str().unwrap())));
-    assert!(stdout.contains("25 | L25"));
+    assert!(stdout.starts_with(&format!("{}:1-400", path.to_str().unwrap())));
+    assert!(stdout.contains("200 | L200"));
 }
 
-// ─── Offset ───────────────────────────────────────────────────
+// ─── Offset (o = floor(r · t), default t=400) ──────────────────
 
 #[test]
 fn zero_offset_is_default() {
-    let content = numbered_lines(200);
+    let content = numbered_lines(1000);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "75"]);
+    let output = run_scopefolio(&["read", "--file", path.to_str().unwrap(), "--line", "500"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Leaf [51,100], no expansion.
-    assert!(stdout.starts_with(&format!("{}:51-100", path.to_str().unwrap())));
+    // Leaf [334, 666], no expansion.
+    assert!(stdout.starts_with(&format!("{}:334-666", path.to_str().unwrap())));
 }
 
 #[test]
 fn positive_offset_expands() {
-    let content = numbered_lines(200);
+    let content = numbered_lines(1000);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
-    // offset 0.1 × 50 = 5 → [46, 105].
+    // offset floor(0.1 · 400) = 40 → leaf [334,666] → [294, 706].
     let output = run_scopefolio(&[
         "read",
         "--file",
         path.to_str().unwrap(),
         "--line",
-        "75",
+        "500",
         "--offset-ratio",
         "0.1",
     ]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with(&format!("{}:46-105", path.to_str().unwrap())));
+    assert!(stdout.starts_with(&format!("{}:294-706", path.to_str().unwrap())));
 }
 
 #[test]
 fn offset_at_file_beginning_clamps() {
-    let content = numbered_lines(200);
+    let content = numbered_lines(1000);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
     let output = run_scopefolio(&[
@@ -205,13 +293,13 @@ fn offset_at_file_beginning_clamps() {
         "1.0",
     ]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Leaf [1,50], offset 50 → start clamped to 1, end 100.
-    assert!(stdout.starts_with(&format!("{}:1-100", path.to_str().unwrap())));
+    // Leaf [1,333], offset 400 → start clamped to 1, end 733.
+    assert!(stdout.starts_with(&format!("{}:1-733", path.to_str().unwrap())));
 }
 
 #[test]
 fn offset_at_file_end_clamps() {
-    let content = numbered_lines(200);
+    let content = numbered_lines(1000);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
     let output = run_scopefolio(&[
@@ -219,13 +307,13 @@ fn offset_at_file_end_clamps() {
         "--file",
         path.to_str().unwrap(),
         "--line",
-        "200",
+        "1000",
         "--offset-ratio",
         "1.0",
     ]);
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Leaf [151,200], offset 50 → [101, 200] clamped at end.
-    assert!(stdout.starts_with(&format!("{}:101-200", path.to_str().unwrap())));
+    // Leaf [667,1000], offset 400 → start 267, end clamped to 1000.
+    assert!(stdout.starts_with(&format!("{}:267-1000", path.to_str().unwrap())));
 }
 
 #[test]
@@ -246,13 +334,14 @@ fn large_offset_clamps_to_whole_file() {
     assert!(stdout.starts_with(&format!("{}:1-100", path.to_str().unwrap())));
 }
 
-// ─── Partition width configuration ────────────────────────────
+// ─── Partition size configuration ───────────────────────────────
 
 #[test]
 fn custom_partition_lines() {
     let content = numbered_lines(100);
     let (_dir, path) = create_temp_file(content.as_bytes());
 
+    // t=25: k = round(100/25) = 4 → leaves of exactly 25 lines.
     let output = run_scopefolio(&[
         "read",
         "--file",
@@ -266,7 +355,7 @@ fn custom_partition_lines() {
     assert!(stdout.starts_with(&format!("{}:51-75", path.to_str().unwrap())));
 }
 
-// ─── Determinism ──────────────────────────────────────────────
+// ─── Determinism ────────────────────────────────────────────────
 
 #[test]
 fn repeated_reads_are_identical() {
@@ -290,7 +379,7 @@ fn repeated_reads_are_identical() {
     assert_eq!(outputs.len(), 5);
 }
 
-// ─── Content preservation ─────────────────────────────────────
+// ─── Content preservation ───────────────────────────────────────
 
 #[test]
 fn content_preserves_whitespace_and_line_numbers() {
@@ -321,7 +410,7 @@ fn crlf_content_is_preserved_not_normalized() {
     assert!(output.stdout.windows(2).any(|w| w == b"\r\n".as_slice()));
 }
 
-// ─── Error handling ───────────────────────────────────────────
+// ─── Error handling ─────────────────────────────────────────────
 
 #[test]
 fn file_not_found_is_deterministic_error() {
