@@ -1,4 +1,4 @@
-//! Line structure derivation from raw file bytes (SPEC §9 step 1-2).
+//! Line structure derivation from raw file bytes (SPEC §11 algorithm step 1-2).
 //!
 //! A line is a sequence of bytes terminated by `\n`. The final line is
 //! counted even when it has no trailing terminator. Line terminators are

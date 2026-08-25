@@ -422,6 +422,7 @@ The rendered output SHOULD clearly identify the returned scope
 
 ```text
 src/extensions/index.ts:1-453
+
 1   | ...
 42  | ...
 ```
