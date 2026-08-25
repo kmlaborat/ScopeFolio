@@ -312,7 +312,9 @@ leaf index j = ⌈ line·k / n ⌉ − 1
 
 **Property (normative): tree lookup ≡ arithmetic lookup for every line of
 every file** — enforced exhaustively by a property test
-(`tests/geometry.rs`).
+(`src/partition.rs`: `tree_lookup_equals_arithmetic_every_line` and
+`tree_property_10k_line_file`; complemented at the API level by
+`tests/geometry.rs`).
 
 The tree is required even though the geometry is pure arithmetic: the
 canonical shape is the foundation on which a future k-ary / adaptive tree
@@ -329,6 +331,12 @@ The public parameter is:
 ```text
 offset_ratio r        (default 0; valid: finite, r ≥ 0; intended range [0, 1])
 ```
+
+The **valid domain** of `r` is exactly: finite and `r ≥ 0`. Values with
+`r > 1` are **valid** (not an error): they simply produce a larger
+offset that clamps at the file bounds, so the returned scope may cover
+the whole file. `[0, 1]` is the **intended (recommended) range**, not
+a validation boundary.
 
 The expansion is computed against the **target** size, not the actual
 leaf size:
@@ -482,7 +490,10 @@ second decision from the model into deterministic infrastructure.
 | `offset_ratio`    |     0   | overlap does not mitigate the residual (eviction-driven) reread and costs tokens (Phase 7, NO-GO). |
 
 Validation: `partition_lines ≥ 1` (0 is a deterministic error);
-`offset_ratio` finite and `≥ 0` (intended range `[0, 1]`).
+`offset_ratio` finite and `≥ 0` is the complete valid domain —
+values with `r > 1` are valid and simply clamp at the file bounds
+(§10); `[0, 1]` is the intended (recommended) range, not a validation
+boundary.
 
 ---
 

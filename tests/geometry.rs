@@ -17,6 +17,12 @@ fn numbered(n: usize) -> String {
     (1..=n).map(|i| format!("{i}\n")).collect()
 }
 
+/// `(target_line, expected (start_line, end_line))`.
+type LineExpectation = (usize, (usize, usize));
+
+/// `(n, t, [line → expected range])` row of the canonical leaf table.
+type TableRow = (usize, usize, Vec<LineExpectation>);
+
 // ─── SPEC §8.2 canonical cases (default target t = 400) ────────
 
 /// Table of canonical (n, t) → leaf intervals. Each target line must
@@ -24,7 +30,7 @@ fn numbered(n: usize) -> String {
 #[test]
 fn canonical_leaf_table() {
     // (n, t, [line → expected (start, end)] ...)
-    let table: Vec<(usize, usize, Vec<(usize, (usize, usize))>)> = vec![
+    let table: Vec<TableRow> = vec![
         // n=453, t=400: k=1 → whole file is one leaf.
         (453, 400, vec![(1, (1, 453)), (226, (1, 453)), (227, (1, 453)), (453, (1, 453))]),
         // n=600, t=400: tie, k=2 → [1,300], [301,600].

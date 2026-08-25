@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "scopefolio",
-    version = "0.2.0",
-    about = "ScopeFolio v0.2.0 — Deterministic scoped file reading"
+    version = "0.2.1",
+    about = "ScopeFolio v0.2.1 — Deterministic scoped file reading"
 )]
 pub struct Cli {
     #[command(subcommand)]

@@ -29,28 +29,30 @@ impl PartitionNode {
 
 /// Leaf count: `k = max(1, round_half_up(n / t))`.
 ///
-/// Computed as `k = max(1, floor((2n + t) / (2t)))` in pure integer
-/// arithmetic (§8.1, §19). `round(n/t)` with ties going up is
-/// `floor(n/t) + (2·(n mod t) >= t)`.
+/// Computed in pure integer arithmetic (§8.1, §19). With `q = n / t`
+/// and `rem = n % t`, `round_half_up(n/t)` is
+/// `q + (2·rem >= t)` — ties round up. The tie test is written as
+/// `rem >= t/2 + t%2` (i.e. `rem >= ceil(t/2)`, mathematically
+/// identical to `2·rem >= t`) so the comparison itself cannot overflow
+/// for any `t <= usize::MAX`. This form is exactly equivalent to the
+/// spec's `floor((2n + t) / (2t))` (cross-checked by the I5 assertion).
 fn leaf_count(n: usize, t: usize) -> usize {
     debug_assert!(t >= 1, "target size must be positive");
     let q = n / t;
     let rem = n % t;
-    let k = q + if 2 * rem >= t { 1 } else { 0 };
+    let k = q + usize::from(rem >= t / 2 + t % 2);
     k.max(1)
 }
 
 /// Leaf boundary prefix: `b(0) = 0`, `b(i) = floor(n·i/k)` for
 /// `1 <= i < k`, `b(k) = n` (§8.2, §19). `n·i` is computed in `u128`
-/// so it cannot overflow for `n <= usize::MAX`.
+/// so it cannot overflow for `n <= usize::MAX`. At `i = k` the formula
+/// yields exactly `n`, so `b(k) = n` holds by construction.
 fn boundaries(n: usize, k: usize) -> Vec<usize> {
     assert!(k >= 1);
-    let mut b = vec![0usize; k + 1];
-    for i in 1..k {
-        b[i] = (n as u128 * i as u128 / k as u128) as usize;
-    }
-    b[k] = n;
-    b
+    (0..=k)
+        .map(|i| (n as u128 * i as u128 / k as u128) as usize)
+        .collect()
 }
 
 /// Canonical binary tree for the `(n, t)` pair (§9).
@@ -94,7 +96,7 @@ fn build_node(lo: usize, hi: usize, b: &[usize]) -> PartitionNode {
 }
 
 /// Find the leaf containing the 1-based `line` (§11).
-pub(crate) fn find_leaf<'a>(node: &'a Rc<PartitionNode>, line: usize) -> &'a PartitionNode {
+pub(crate) fn find_leaf(node: &Rc<PartitionNode>, line: usize) -> &PartitionNode {
     let mut cur = node;
     while let Some((l, r)) = &cur.children {
         cur = if line <= l.end { l } else { r };
@@ -104,13 +106,13 @@ pub(crate) fn find_leaf<'a>(node: &'a Rc<PartitionNode>, line: usize) -> &'a Par
 
 /// Closed-form leaf index oracle: `j = ceil(line·k/n) − 1` (SPEC_v0.2.0 §9).
 ///
-/// `ceil` computed as `(line·k + n − 1) / n` in `u128` to avoid
+/// `ceil` computed as `(line·k).div_ceil(n)` in `u128` to avoid
 /// overflow (§19).
 #[allow(dead_code)] // closed-form oracle cross-checked by tests
 pub(crate) fn leaf_index(n: usize, k: usize, line: usize) -> usize {
     assert!(1 <= line && line <= n);
     assert!(k >= 1);
-    ((line as u128 * k as u128 + n as u128 - 1) / n as u128) as usize - 1
+    (line as u128 * k as u128).div_ceil(n as u128) as usize - 1
 }
 
 #[cfg(test)]
@@ -129,9 +131,26 @@ mod tests {
 
     fn children(node: &Rc<PartitionNode>) -> [&Rc<PartitionNode>; 2] {
         match &node.children {
-            Some((l, r)) => [&l, &r],
+            Some((l, r)) => [l, r],
             None => panic!("expected internal node"),
         }
+    }
+
+    // ─── Overflow safety (v0.2.1) ───────────────────────────────
+
+    /// The tie comparison in `leaf_count` must not overflow for any
+    /// `t <= usize::MAX`. With `t = 2^(BITS-1)`: `n = 2t−1` gives
+    /// `rem = t−1`, `2·rem = 2t−2 >= t` → rounds up to `k = 2` (the
+    /// old `2 * rem` formulation overflowed exactly here); just below
+    /// `3t/2` it rounds down to `k = 1`.
+    #[test]
+    fn leaf_count_tie_comparison_overflow_safe() {
+        let t = 1usize << (usize::BITS - 1); // 2^(BITS-1)
+        let n_top = usize::MAX; // 2t − 1: rem = t − 1 → tie rounds up
+        assert_eq!(leaf_count(n_top, t), 2);
+        assert_eq!(leaf_count(t + t / 2 - 1, t), 1); // just below 3t/2
+        assert_eq!(leaf_count(t, t), 1);
+        assert_eq!(leaf_count(t + 1, t), 1);
     }
 
     // ─── Canonical test cases (SPEC_v0.2.0 §8.2, §20) ───────────
@@ -252,7 +271,14 @@ mod tests {
                 }
 
                 // I5: k ≡ max(1, round_half_up(n/t)) = max(1, floor((2n+t)/(2t))).
-                assert_eq!(k, ((2 * n + t) / (2 * t)).max(1), "n={n}, t={t}");
+                // (u128 so the cross-check itself cannot overflow.)
+                let n128 = n as u128;
+                let t128 = t as u128;
+                assert_eq!(
+                    k,
+                    (((2 * n128 + t128) / (2 * t128)) as usize).max(1),
+                    "n={n}, t={t}"
+                );
 
                 // I7: monotone in n.
                 assert!(k >= prev_k, "k decreased: n={n}, t={t}");
@@ -281,7 +307,7 @@ mod tests {
                         assert_eq!(size, n);
                     } else {
                         assert!(
-                            size == n / k || size == (n + k - 1) / k,
+                            size == n / k || size == n.div_ceil(k),
                             "n={n}, t={t}, j={j}, size={size}"
                         );
                     }
